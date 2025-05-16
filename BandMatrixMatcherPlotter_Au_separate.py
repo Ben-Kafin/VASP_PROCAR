@@ -1,10 +1,3 @@
-# -*- coding: utf-8 -*-
-"""
-Created on Thu May 15 22:42:07 2025
-
-@author: Benjamin Kafin
-"""
-
 import os
 import numpy as np
 import matplotlib.pyplot as plt
@@ -12,36 +5,64 @@ from collections import defaultdict
 from procar_filter import ProcarStatePlotter
 
 class CombinedBandMatcher:
-    def __init__(self, simple_dir, full_dir, fermi_level, max_distance=0.01):
+    def __init__(self, simple_dir, full_dir, max_distance=0.01):
         """
         Initializes the CombinedBandMatcher.
         
         Parameters:
           simple_dir   : Directory containing the PROCAR and POSCAR files for the simple system.
           full_dir     : Directory containing the PROCAR and POSCAR files for the full system.
-          fermi_level  : Fermi level (in eV) used to shift band energies.
           max_distance : Maximum allowed distance (in POSCAR coordinate units) for matching atoms.
+          
+        The Fermi energy is read automatically from the DOSCAR file in the full system directory.
         """
         self.simple_dir = simple_dir
         self.full_dir = full_dir
-        self.fermi_level = fermi_level
         self.max_distance = max_distance
         
-        # Create a ProcarStatePlotter for each system.
-        self.simple_plotter = ProcarStatePlotter(simple_dir, fermi_level)
-        self.full_plotter   = ProcarStatePlotter(full_dir, fermi_level)
+        # Get the Fermi level from DOSCAR in the full system directory.
+        self.fermi_level = self.get_fermi_level_from_doscar(self.full_dir)
+        if self.fermi_level is None:
+            raise ValueError("Fermi energy could not be determined from DOSCAR in the full system directory!")
+        print(f"Using Fermi energy from DOSCAR: {self.fermi_level:.4f} eV")
         
-        # Combined band states (one per unique band, after combining k-point data)
+        # Create ProcarStatePlotter instances using the determined Fermi energy.
+        self.simple_plotter = ProcarStatePlotter(simple_dir, self.fermi_level)
+        self.full_plotter   = ProcarStatePlotter(full_dir, self.fermi_level)
+        
+        # Combined band states (one per unique band, after combining the k-point data).
         self.simple_combined = []
         self.full_combined = []
         
-        # Atom mapping built from the POSCAR files (mapping simple atom index → full atom index).
+        # Atom mapping from the POSCAR files: { simple_atom_index: full_atom_index }.
         self.atom_mapping = {}
+
+    def get_fermi_level_from_doscar(self, directory):
+        """
+        Reads the DOSCAR file in the specified directory and returns the Fermi energy.
+        It assumes that the Fermi energy is the fourth number (index 3) on the sixth line (index 5).
+        For example, if the sixth line is:
+        
+          "   -5.4321  0.0000  0.0000  -12.34567890  0.00123 ..."
+        
+        then the Fermi energy will be -12.34567890.
+        """
+        doscar_path = os.path.join(directory, "DOSCAR")
+        with open(doscar_path, "r") as f:
+            lines = f.readlines()
+            if len(lines) < 6:
+                raise ValueError("DOSCAR file does not have at least 6 lines.")
+            # Get the sixth line and split it into tokens.
+            tokens = lines[5].strip().split()
+            # The fourth token (index 3) should hold the Fermi energy.
+            ef = float(tokens[3])
+        return ef
+
 
     def parse_poscar_from_dir(self, directory):
         """
         Reads the POSCAR file in the given directory and returns a dictionary mapping atom indices
-        to a dictionary with keys "element" and "coord" (a NumPy array of [x, y, z]).
+        to a dict with keys "element" and "coord" (a numpy array of [x, y, z]).
         Assumes VASP 5+ format with optional Selective Dynamics.
         """
         poscar_path = None
@@ -91,9 +112,9 @@ class CombinedBandMatcher:
 
     def get_atom_mapping(self):
         """
-        Builds a mapping between the simple and full systems by reading their POSCAR files.
-        For each simple atom, only full atoms with the same element are considered and the closest is used.
-        The mapping is stored as: { simple_atom_index: full_atom_index, ... }.
+        Constructs a one-to-one mapping between atoms in the simple and full systems using their POSCAR files.
+        For each simple atom, only full system atoms with the same element are considered; the closest (by Euclidean distance)
+        is chosen if within max_distance. The mapping is stored as: { simple_atom_index: full_atom_index, ... }.
         """
         simple_atoms = self.parse_poscar_from_dir(self.simple_dir)
         full_atoms = self.parse_poscar_from_dir(self.full_dir)
@@ -107,8 +128,7 @@ class CombinedBandMatcher:
             for f_idx, f_data in full_atoms.items():
                 if f_data["element"] != s_elem:
                     continue
-                f_coord = f_data["coord"]
-                dist = np.linalg.norm(s_coord - f_coord)
+                dist = np.linalg.norm(s_coord - f_data["coord"])
                 if dist < best_dist:
                     best_dist = dist
                     best_f_idx = f_idx
@@ -118,10 +138,10 @@ class CombinedBandMatcher:
 
     def load_combined_states(self):
         """
-        Loads PROCAR states for each system via ProcarStatePlotter and combines the k-point data
-        (weighted by k-point weights) for each unique band.
+        Loads PROCAR states for each system (via ProcarStatePlotter) and combines the k-point data
+        (weighted by the k-point weights) for each unique band.
         The combined states are stored in self.simple_combined and self.full_combined.
-        Also exports the combined composition matrices to text files in each system's directory.
+        Also exports the combined composition matrices to text files in their respective directories.
         """
         self.simple_plotter.parse_procar()
         self.full_plotter.parse_procar()
@@ -134,8 +154,7 @@ class CombinedBandMatcher:
 
     def assign_sequential_indices(self):
         """
-        Sorts and assigns new sequential indices (stored as "seq") to the combined states for both systems,
-        based on increasing energy.
+        Sorts and assigns new sequential indices (stored as 'seq') to the combined states for both systems based on increasing energy.
         """
         self.simple_combined = sorted(self.simple_combined, key=lambda s: s["energy"])
         for i, state in enumerate(self.simple_combined, start=1):
@@ -146,9 +165,9 @@ class CombinedBandMatcher:
 
     def adjust_simple_combined_band_energies(self):
         """
-        Shifts all simple system combined state energies by a constant so that
-        the lowest-energy simple combined band aligns with the lowest-energy full combined band.
-        Returns the energy shift.
+        Shifts the energies of the simple combined bands by a constant so that the lowest-energy simple band aligns with
+        the lowest-energy full band.
+        Returns the computed energy shift.
         """
         if not self.full_combined or not self.simple_combined:
             return 0.0
@@ -159,18 +178,27 @@ class CombinedBandMatcher:
             state["energy"] += energy_shift
         return energy_shift
 
+    def shift_energies_to_fermi(self):
+        """
+        Subtracts the full system's Fermi energy (from DOSCAR) from every combined state's energy,
+        so that the full system's Fermi energy is at 0 eV in both systems.
+        """
+        for state in self.simple_combined:
+            state["energy"] -= self.fermi_level
+        for state in self.full_combined:
+            state["energy"] -= self.fermi_level
+
     def export_combined_bands(self, combined_states, out_filename):
         """
-        Exports the combined composition matrices (one per band) into a tab-delimited text file.
-        The states are sorted in increasing order of energy and re-indexed sequentially.
-        For each band, the header shows the new sequential index ("seq"), the old original band number,
-        and the shifted energy. Then the 2-D normalized composition matrix (restricted to mapped atoms) is output.
+        Exports the combined composition matrices into a tab-delimited text file.
+        The states are assigned new sequential indices (stored in 'seq') and sorted by energy.
+        For each band, a header is printed that shows the new sequential index, original band number, and the shifted energy.
+        Then the 2-D normalized composition matrix (restricted to mapped atoms) is output.
         The file is saved in the same directory as the PROCAR file.
         """
-        # First, reassign sequential indices.
         self.assign_sequential_indices()
         out_lines = []
-        for state in self.simple_combined:  # This method is used for simple system export; similarly for full.
+        for state in combined_states:
             M = self.restrict_matrix(state, system="simple", flatten=False)
             norm_val = np.linalg.norm(M)
             norm_M = M / norm_val if norm_val != 0 else M
@@ -185,29 +213,29 @@ class CombinedBandMatcher:
 
     def restrict_matrix(self, state, system="simple", flatten=True):
         """
-        Restricts the combined state's orbital_matrix (shape (N,4)) to only the rows that correspond
+        Restricts the combined state's orbital_matrix (of shape (N,4)) to only the rows corresponding
         to atoms present in the simple system.
         
-        For system "simple": uses the simple system atom indices.
-        For system "full": uses the mapping (for each simple atom, the corresponding row in the full system).
-        Returns a flattened vector if flatten is True, or a 2-D matrix otherwise.
+        For system "simple": uses the simple POSCAR atom indices.
+        For system "full": uses the atom mapping (i.e. for each simple atom, the corresponding row in the full system).
+        Returns a flattened 1-D vector if flatten is True, or a 2-D array otherwise.
         """
         keys_sorted = sorted(self.atom_mapping.keys())
         if "orbital_matrix" not in state:
             return None
         if system == "simple":
-            arr = np.array([ state["orbital_matrix"][idx-1] for idx in keys_sorted if idx-1 < state["orbital_matrix"].shape[0] ])
+            arr = np.array([state["orbital_matrix"][idx-1] for idx in keys_sorted if idx-1 < state["orbital_matrix"].shape[0]])
         elif system == "full":
-            arr = np.array([ state["orbital_matrix"][self.atom_mapping[idx]-1] for idx in keys_sorted if self.atom_mapping[idx]-1 < state["orbital_matrix"].shape[0] ])
+            arr = np.array([state["orbital_matrix"][self.atom_mapping[idx]-1] for idx in keys_sorted if self.atom_mapping[idx]-1 < state["orbital_matrix"].shape[0]])
         else:
             raise ValueError("system must be 'simple' or 'full'")
         return arr.flatten() if flatten else arr
 
     def get_removed_matrix(self, state):
         """
-        For a given full system combined state, returns two elements:
-          - The composition matrix for atoms that are NOT mapped (i.e. extra atoms in full system),
-          - The list of full system atom numbers corresponding to these rows.
+        For a given full system combined state, returns a tuple:
+         (removed_matrix, list_of_removed_atom_numbers)
+        where removed_matrix holds the rows in the full system's orbital_matrix that do not correspond to any mapped simple atom.
         """
         if "orbital_matrix" not in state:
             return None
@@ -223,9 +251,9 @@ class CombinedBandMatcher:
 
     def get_removed_orbital_info(self, state):
         """
-        Computes a summary for the removed atoms for a full system state.
-        For each removed atom, includes its full system atom number and its orbital contributions.
-        Sorts these by the "tot" contribution in descending order and reports the top three.
+        Computes a summary for the removed atoms in a full system state.
+        For each removed atom, produces a string including its full system atom number and its orbital contributions (s, p, d, tot).
+        Then sorts the atoms by the 'tot' column (descending) and returns a semicolon-separated string of the top three atoms.
         """
         result = self.get_removed_matrix(state)
         if result is None:
@@ -242,9 +270,9 @@ class CombinedBandMatcher:
 
     def export_removed_bands(self):
         """
-        Exports the composition matrices corresponding to the removed atoms (extra atoms in the full system)
-        for each full system combined state into a separate file.
-        The format is identical to the combined composition matrix export.
+        Exports the removed composition matrices (for extra full system atoms not mapped to the simple system)
+        into a separate file in the full system directory.
+        The format is equivalent to that of the combined composition matrix export.
         """
         out_filename = os.path.join(self.full_dir, "full_removed_composition_matrices.txt")
         out_lines = []
@@ -256,7 +284,7 @@ class CombinedBandMatcher:
             R, removed_list = result
             norm_val = np.linalg.norm(R)
             norm_R = R / norm_val if norm_val != 0 else R
-            out_lines.append(f"Band {state.get('seq',state['band'])}\tOriginalBand: {state['band']}\tEnergy: {state['energy']:.4f} eV")
+            out_lines.append(f"Band {state.get('seq', state['band'])}\tOriginalBand: {state['band']}\tEnergy: {state['energy']:.4f} eV")
             out_lines.append(f"Removed Atoms: {removed_list}")
             for row in norm_R:
                 out_lines.append("\t".join(f"{val:.4e}" for val in row))
@@ -266,33 +294,22 @@ class CombinedBandMatcher:
                 fout.write(line + "\n")
         print(f"Exported removed composition matrices to {out_filename}")
 
-    def assign_sequential_indices(self):
-        """
-        Assigns new sequential indices (stored as 'seq') to the combined states for both systems
-        based on increasing energy.
-        """
-        self.simple_combined = sorted(self.simple_combined, key=lambda s: s["energy"])
-        for i, state in enumerate(self.simple_combined, start=1):
-            state["seq"] = i
-        self.full_combined = sorted(self.full_combined, key=lambda s: s["energy"])
-        for i, state in enumerate(self.full_combined, start=1):
-            state["seq"] = i
-
     def match_combined_bands(self):
         """
         For each full system combined band, restricts its composition matrix (using full mapping) to the mapped atoms,
         normalizes the flattened vector, and computes its inner product with every normalized simple system combined band's
         restricted vector (using simple mapping). The simple band with the highest absolute overlap is chosen as the match.
-        Also computes the energy difference (full energy minus simple energy) and extracts the removed orbital summary.
+        Also computes the energy difference (full energy - simple energy) and extracts removed orbital info.
         Returns a list of matches as tuples:
-           (full_state, best_simple_state, overlap, energy_difference, removed_orb_info),
-        where the final fields use the new sequential indices in their state dictionaries.
+          (full_state, best_simple_state, overlap, energy_difference, removed_orb_info),
+        using the new sequential indices ("seq") for both systems.
         """
         self.get_atom_mapping()
         self.load_combined_states()
         self.assign_sequential_indices()
         energy_shift = self.adjust_simple_combined_band_energies()
         print(f"Applied energy shift of {energy_shift:.4f} eV to simple combined bands.")
+        self.shift_energies_to_fermi()
         matches = []
         for full_state in self.full_combined:
             v_full = self.restrict_matrix(full_state, system="full", flatten=True)
@@ -303,7 +320,7 @@ class CombinedBandMatcher:
             best_simple = None
             for simple_state in self.simple_combined:
                 v_simple = self.restrict_matrix(simple_state, system="simple", flatten=True)
-                if v_simple is None or np.linalg.norm(v_simple)==0:
+                if v_simple is None or np.linalg.norm(v_simple) == 0:
                     continue
                 v_simple_norm = v_simple / np.linalg.norm(v_simple)
                 overlap = np.dot(v_full_norm, v_simple_norm)
@@ -321,10 +338,12 @@ class CombinedBandMatcher:
 
     def final_plot(self, matches):
         """
-        Produces a final figure with two subplots: the top panel draws vertical lines (delta plot) for simple system combined bands,
-        with energy on the x-axis and total composition (sum over "tot" column) on the y-axis, and with the y-axis inverted.
-        The bottom panel plots vertical lines for full system combined bands, coloring each line using the color of the matched simple state.
-        Saves the final figure to the full system directory.
+        Produces the final figure with two subplots:
+          - Top subplot: simple system combined bands are displayed as vertical delta lines (with inverted y-axis).
+          - Bottom subplot: full system combined bands are displayed as vertical delta lines, colored by the matched simple state.
+        The x-axis is energy (with the full system's Fermi level at 0 eV) and the y-axis is total composition (sum over the "tot" column).
+        A dotted black vertical line is also drawn at x=0 in both subplots.
+        The figure is saved to the full system directory.
         """
         simple_sorted = sorted(self.simple_combined, key=lambda s: s["energy"])
         full_sorted = sorted(self.full_combined, key=lambda s: s["energy"])
@@ -339,7 +358,7 @@ class CombinedBandMatcher:
         full_total = [total_composition(s, "full") for s in full_sorted]
         
         cmap = plt.get_cmap("tab10")
-        simple_colors = { s["seq"]: cmap((i) % 10) for i, s in enumerate(simple_sorted, start=1) }
+        simple_colors = { s["seq"]: cmap(i % 10) for i, s in enumerate(simple_sorted, start=1) }
         
         full_colors = []
         for state in full_sorted:
@@ -350,23 +369,27 @@ class CombinedBandMatcher:
                 color = "gray"
             full_colors.append(color)
         
-        fig, (ax_top, ax_bottom) = plt.subplots(2,1, sharex=True, figsize=(8,6))
+        fig, (ax_top, ax_bottom) = plt.subplots(2, 1, sharex=True, figsize=(8, 6))
         
+        # Plot simple bands.
         for energy, total, s in zip(simple_energy, simple_total, simple_sorted):
             color = simple_colors.get(s["seq"], "black")
             ax_top.vlines(energy, 0, total, colors=color, lw=1)
+        ax_top.axvline(x=0, color='black', linestyle='dotted')
         ax_top.set_ylabel("Total Composition")
         ax_top.set_title("Simple Combined Bands (Upside-Down)")
         ax_top.invert_yaxis()
         
+        # Plot full bands.
         for energy, total, s, color in zip(full_energy, full_total, full_sorted, full_colors):
             ax_bottom.vlines(energy, 0, total, colors=color, lw=1)
+        ax_bottom.axvline(x=0, color='black', linestyle='dotted')
         ax_bottom.set_ylabel("Total Composition")
         ax_bottom.set_xlabel("Energy (eV)")
         ax_bottom.set_title("Full Combined Bands")
         
         fig.suptitle("Combined Band Matching: Energy vs Total Composition", fontsize=14)
-        plt.tight_layout(rect=[0,0,1,0.95])
+        plt.tight_layout(rect=[0, 0, 1, 0.95])
         out_fig = os.path.join(self.full_dir, "combined_band_matching_figure.png")
         plt.savefig(out_fig, dpi=300)
         plt.show()
@@ -375,7 +398,7 @@ class CombinedBandMatcher:
     def export_matches(self, matches):
         """
         Exports the matching results to a tab-delimited text file in the full system directory.
-        The output includes: FullBand (new seq), FullEnergy, SimpleBand (new seq), SimpleEnergy, Overlap, EnergyDifference, and RemovedOrbitals.
+        The output includes: FullBand(seq), FullEnergy, SimpleBand(seq), SimpleEnergy, Overlap, EnergyDifference, and RemovedOrbitals.
         """
         out_filename = os.path.join(self.full_dir, "combined_band_matching_results.txt")
         out_lines = []
@@ -389,7 +412,7 @@ class CombinedBandMatcher:
             out_lines.append(line)
         with open(out_filename, "w") as fout:
             for line in out_lines:
-                fout.write(line+"\n")
+                fout.write(line + "\n")
         print(f"Exported combined band matching results to {out_filename}")
 
     def run(self):
@@ -402,9 +425,9 @@ class CombinedBandMatcher:
         return matches
 
 if __name__ == "__main__":
-    simple_dir = 'C:/Users/Benjamin Kafin/Documents/VASP/NHC/IPR/lone/NHC/NHC_iPr/4layers/freegold1/freegold2/kpoints551/NHC/' 
-    full_dir = 'C:/Users/Benjamin Kafin/Documents/VASP/NHC/IPR/lone/NHC/NHC_iPr/4layers/freegold1/freegold2/kpoints551/dipole_correction/efield/'
-    fermi_level = 0  # Example value
+    simple_dir = 'd' 
+    full_dir = 'd'
+    # No fermi_level input needed since it is extracted from DOSCAR.
     
-    matcher = CombinedBandMatcher(simple_dir, full_dir, fermi_level, max_distance=0.01)
+    matcher = CombinedBandMatcher(simple_dir, full_dir, max_distance=0.01)
     matcher.run()
