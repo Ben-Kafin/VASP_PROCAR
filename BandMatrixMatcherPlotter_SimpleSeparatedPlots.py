@@ -458,10 +458,10 @@ class CombinedBandMatcher:
 
 
 if __name__ == "__main__":
-    simple_dir = 'C:/Users/Benjamin Kafin/Documents/VASP/NHC/IPR/lone/NHC/NHC_iPr/4layers/freegold1/freegold2/kpoints551/NHC/' 
-    full_dir = 'C:/Users/Benjamin Kafin/Documents/VASP/NHC/IPR/lone/NHC/NHC_iPr/4layers/freegold1/freegold2/kpoints551/dipole_correction/efield/'
+    simple_dir = 'd' 
+    full_dir = 'd'
 
     
     matcher = CombinedBandMatcher(simple_dir, full_dir, max_distance=0.01)
     # Optionally, pass an energy range tuple (emin, emax) to filter the grouped full system plots.
-    matcher.run(energy_range=(-5.0,7.082944805))
+    matcher.run(energy_range=(-5.0,7.0))
