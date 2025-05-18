@@ -1,16 +1,3 @@
-# -*- coding: utf-8 -*-
-"""
-Created on Thu May 15 21:57:33 2025
-
-@author: Benjamin Kafin
-"""
-
-# -*- coding: utf-8 -*-
-"""
-Created on Thu May 15 21:15:52 2025
-
-@author: Benjamin Kafin
-"""
 
 import os
 import re
@@ -84,124 +71,107 @@ class ProcarStatePlotter:
         For each state, the code reads the individual orbital contributions for each ion from the ion data lines.
         It saves these contributions (s, p, d, tot) for each ion index in a dictionary under the key "contrib_by_ion".
         
-        Additionally, it builds an orbital composition matrix (shape: (N, 4)), where N is number of atoms (from POSCAR).
+        Additionally, it builds an orbital composition matrix (shape: (N, 4)), where N is the number of atoms (from POSCAR).
         The state dictionary includes:
-            'kpoint', 'band', 'energy', 'occ', 'kweight',
+            'kpoint', 'band', 'band_name', 'energy', 'occ', 'kweight',
             'contrib_by_ion': { ion_index: {"s":..., "p":..., "d":..., "tot":...}, ... }
             'orbital_matrix': A NumPy array of shape (N,4) (rows ordered by atom index).
+            
+        This updated version extracts the band name (if provided) from the header line.
         """
         if not os.path.exists(self.procar_path):
             print("PROCAR file not found in", self.directory)
             return
-
+    
         with open(self.procar_path, "r") as f:
             lines = f.readlines()
-
+    
         self.states = []
-        current_kpoint = None
-        current_kweight = 1.0  # default weight if not found.
-        current_band = None
-        current_energy = None
-        current_occ = None
-        current_contrib_ion = {}  # Contributions for the current band.
-
         i = 0
+        current_kpoint = None
+        current_kweight = 1.0  # default weight if not found
+    
         while i < len(lines):
             line = lines[i].strip()
             if not line:
                 i += 1
                 continue
-
-            # Look for a k-point line.
-            # Example k-point line: "k-point     1 :  0.00000000 0.00000000 0.00000000     weight = 1.00000000"
-            k_match = re.match(r"k-point\s+(\d+)\s*:", line)
+    
+            # Look for a k-point header.
+            # Example: "k-point     2 :    0.20000000 0.00000000 0.00000000     weight = 0.08000000"
+            k_match = re.search(r"k[- ]?point\s+(\d+).*weight\s*=\s*([-\d.Ee]+)", line, re.IGNORECASE)
             if k_match:
                 current_kpoint = int(k_match.group(1))
-                # Attempt to extract weight using re.search.
-                weight_match = re.search(r"weight\s*=\s*([-\d.Ee]+)", line)
-                if weight_match:
-                    current_kweight = float(weight_match.group(1))
-                else:
-                    current_kweight = 1.0
+                current_kweight = float(k_match.group(2))
                 i += 1
-                continue
-
-            # Look for a band line.
-            b_match = re.match(r"band\s+(\d+)\s+#\s+energy\s+([-\d.Ee]+)\s+#\s+occ\.\s+([\d.Ee]+)", line)
-            if b_match:
-                # Save the previous state if one was in progress.
-                if current_band is not None:
-                    # Build the orbital matrix.
-                    if self.atom_type_map:
-                        N = max(self.atom_type_map.keys())
+                # Continue processing the bands for this k-point until the next k-point header.
+                while i < len(lines) and not re.search(r"k[- ]?point", lines[i], re.IGNORECASE):
+                    band_line = lines[i].strip()
+                    # Look for a band header.
+                    # The following pattern will capture:
+                    #   group(1): band number,
+                    #   group(2): any extra text between the band number and '# energy' (i.e. the "name" portion),
+                    #   group(3): energy,
+                    #   group(4): occupancy.
+                    b_match = re.search(
+                        r"band\s+(\d+)(.*?)#\s+energy\s+([-\d.Ee]+)\s+#\s+occ\.\s+([-\d.Ee]+)",
+                        band_line, re.IGNORECASE
+                    )
+                    if b_match:
+                        band_index = int(b_match.group(1))
+                        extra_text = b_match.group(2).strip()
+                        # Use the extra text as band_name if it exists; otherwise default to "band X"
+                        if extra_text:
+                            band_name = extra_text
+                        else:
+                            band_name = f"band {band_index}"
+                        energy = float(b_match.group(3))
+                        occ = float(b_match.group(4))
+                        
+                        # Initialize the orbital matrix.
+                        if self.atom_type_map:
+                            N = max(self.atom_type_map.keys())
+                        else:
+                            N = 0
+                        orbital_matrix = np.zeros((N, 4))
+                        
+                        # Create a state dictionary for this band entry.
+                        state = {
+                            "kpoint": current_kpoint,
+                            "kweight": current_kweight,
+                            "band": band_index,
+                            "band_name": band_name,
+                            "energy": energy,
+                            "occ": occ,
+                            "contrib_by_ion": {},
+                            "orbital_matrix": orbital_matrix
+                        }
+                        i += 1
+                        # Process ion contribution lines until the next band or k-point header.
+                        while i < len(lines) and not re.search(r"^(band\s+|k[- ]?point)", lines[i], re.IGNORECASE):
+                            ion_line = lines[i].strip()
+                            # Skip header lines for ion data.
+                            if ion_line.lower().startswith("ion") and "tot" in ion_line.lower():
+                                i += 1
+                                continue
+                            ion_match = re.match(r"^(\d+)\s+([-\d.Ee]+)\s+([-\d.Ee]+)\s+([-\d.Ee]+)\s+([-\d.Ee]+)", ion_line)
+                            if ion_match:
+                                ion_index = int(ion_match.group(1))
+                                s_val = float(ion_match.group(2))
+                                p_val = float(ion_match.group(3))
+                                d_val = float(ion_match.group(4))
+                                tot_val = float(ion_match.group(5))
+                                state["contrib_by_ion"][ion_index] = {"s": s_val, "p": p_val, "d": d_val, "tot": tot_val}
+                                if ion_index <= state["orbital_matrix"].shape[0]:
+                                    state["orbital_matrix"][ion_index - 1, :] = [s_val, p_val, d_val, tot_val]
+                            i += 1
+                        self.states.append(state)
                     else:
-                        N = max(current_contrib_ion.keys()) if current_contrib_ion else 0
-                    orb_matrix = np.zeros((N, 4))
-                    for ion_index, orb_dict in current_contrib_ion.items():
-                        orb_matrix[ion_index-1, 0] = orb_dict.get("s", 0.0)
-                        orb_matrix[ion_index-1, 1] = orb_dict.get("p", 0.0)
-                        orb_matrix[ion_index-1, 2] = orb_dict.get("d", 0.0)
-                        orb_matrix[ion_index-1, 3] = orb_dict.get("tot", 0.0)
-                    state = {
-                        "kpoint": current_kpoint,
-                        "kweight": current_kweight,
-                        "band": current_band,
-                        "energy": current_energy,
-                        "occ": current_occ,
-                        "contrib_by_ion": current_contrib_ion.copy(),
-                        "orbital_matrix": orb_matrix
-                    }
-                    self.states.append(state)
-                # Start a new band.
-                current_band = int(b_match.group(1))
-                current_energy = float(b_match.group(2))
-                current_occ = float(b_match.group(3))
-                current_contrib_ion = {}  # Reset contributions for the new band.
-                i += 1
+                        i += 1
                 continue
-
-            # Skip the ion header line.
-            if line.lower().startswith("ion") and "tot" in line.lower():
-                i += 1
-                continue
-
-            # Process an ion data line.
-            ion_match = re.match(r"^\s*(\d+)\s+([-\d.Ee]+)\s+([-\d.Ee]+)\s+([-\d.Ee]+)\s+([-\d.Ee]+)", line)
-            if ion_match:
-                ion_index = int(ion_match.group(1))
-                s_val = float(ion_match.group(2))
-                p_val = float(ion_match.group(3))
-                d_val = float(ion_match.group(4))
-                tot_val = float(ion_match.group(5))
-                current_contrib_ion[ion_index] = {"s": s_val, "p": p_val, "d": d_val, "tot": tot_val}
-                i += 1
-                continue
-
-            i += 1
-
-        # Save the last state.
-        if current_band is not None:
-            if self.atom_type_map:
-                N = max(self.atom_type_map.keys())
             else:
-                N = max(current_contrib_ion.keys()) if current_contrib_ion else 0
-            orb_matrix = np.zeros((N, 4))
-            for ion_index, orb_dict in current_contrib_ion.items():
-                orb_matrix[ion_index-1, 0] = orb_dict.get("s", 0.0)
-                orb_matrix[ion_index-1, 1] = orb_dict.get("p", 0.0)
-                orb_matrix[ion_index-1, 2] = orb_dict.get("d", 0.0)
-                orb_matrix[ion_index-1, 3] = orb_dict.get("tot", 0.0)
-            state = {
-                "kpoint": current_kpoint,
-                "kweight": current_kweight,
-                "band": current_band,
-                "energy": current_energy,
-                "occ": current_occ,
-                "contrib_by_ion": current_contrib_ion.copy(),
-                "orbital_matrix": orb_matrix
-            }
-            self.states.append(state)
-
+                i += 1
+    
         print("Parsed", len(self.states), "states from PROCAR.")
 
     def build_state_types(self):
@@ -261,25 +231,31 @@ class ProcarStatePlotter:
            - the orbital_matrix,
            - the energy, and
            - the occupancy.
+           
+        In addition, the band name (extracted from the PROCAR header) is stored.
         The combined state for each band is returned as a new dictionary.
         """
         band_groups = defaultdict(list)
         for state in self.states:
             band_groups[state["band"]].append(state)
+        
         combined_states = []
         for band, states in band_groups.items():
             total_weight = sum(s["kweight"] for s in states)
             combined_matrix = sum(s["orbital_matrix"] * s["kweight"] for s in states) / total_weight
             avg_energy = sum(s["energy"] * s["kweight"] for s in states) / total_weight
             avg_occ = sum(s["occ"] * s["kweight"] for s in states) / total_weight
+            
             combined_states.append({
                 "band": band,
+                "band_name": states[0].get("band_name", f"band {band}"),
                 "energy": avg_energy,
                 "occ": avg_occ,
                 "orbital_matrix": combined_matrix,
                 "total_weight": total_weight
             })
-        # Sort the combined states in increasing order of energy.
+        
+        # Sort the combined states by increasing energy.
         combined_states = sorted(combined_states, key=lambda s: s["energy"])
         self.states_combined = combined_states
         return combined_states
@@ -346,7 +322,7 @@ class ProcarStatePlotter:
 # ----- Run the Code -----
 if __name__ == "__main__":
     # Update the directory path and fermi level as needed.
-    directory = "C:/Users/Benjamin Kafin/Documents/VASP/NHC/IPR/lone/NHC/NHC_iPr/4layers/freegold1/freegold2/kpoints551/NHC/"
+    directory = "C:/d"
     fermi_level = 0  # Example value; adjust as needed.
     filter_types = ["Au"]
     
