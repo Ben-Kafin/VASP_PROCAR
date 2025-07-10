@@ -337,7 +337,7 @@ class ProcarStatePlotter:
 
 # ----- Run the Code -----
 if __name__ == "__main__":
-    directory = 'C:/Users/Benjamin Kafin/Documents/VASP/fcc/NHC'
+    directory = 'dir'
     fermi_level = -1.9849  # Example value; adjust as needed.
     filter_types = []
     
