@@ -15,13 +15,13 @@ Specifically, the files "procar_filter",and the two Band_matching files are desi
 
 Procar_filter_lorbit14 and the Molecular_Orbital_projection_matcheing_cmap_interactive code are designed to work with VASP calculation using lorbit = 14.
   lorbit = 14 writes the PROCAR and DOSCAR with magnetic spin resolved orbitals (s, px, py, px, dxy, dxy, dyz, dxz, dx2-y2, and dz2).
-  procar_filter_lorbit14 works exactly as the og procar_filter, but dynamically uses data headers and column numbers to parse any number of orbitals in a PROCAR
-  Molecular Orbital Projection Matching cmap interactive is the same logic and comes from the same orignal files as the band matchers (and works with og procar filter if import line is changed)
+  procar_filter_lorbit14 works exactly as the og procar_filter, but dynamically uses data headers and column numbers to parse any number of orbitals in a PROCAR.
+  Molecular Orbital Projection Matching cmap interactive is the same logic and comes from the same orignal files as the band matchers (and works with og procar filter if import line is changed).
     Also uses a divergent color map for the plotting so states that have big changes are identifiable and all simple states have unique colors.
     Uses mplcursors (must "pip install mplcursors") so the final plot will tell you the full system band that the cursor is hovering over with the following information:
-      Full band#, lone molecular band#, Energy Shift (eV)
-    Will write two additional txt files
-      one that is every match ordered by the absolute value of their energy shift
-      One that for each lone molecular band will take a weighted sum of the energy shifts of every full system  to get a single numerical value to give a general  behavior of the lone molecular state upon adsorption
-        weights are the total population (y value) of each state normalized by the original lone molecular state's total poulation
+      Full band#, lone molecular band#, Energy Shift (eV).
+    Will write two additional txt files.
+      one that is every match ordered by the absolute value of their energy shift.
+      One that for each lone molecular band will take a weighted sum of the energy shifts of every full system  to get a single numerical value to give a general  behavior of the lone molecular state upon adsorption.
+        weights are the total population (y value) of each state normalized by the original lone molecular state's total poulation.
   
