@@ -3,7 +3,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 import mplcursors
 from collections import defaultdict
-from procar_filter_lorbit14 import ProcarStatePlotter
+from procar_filter_lorbit14 import ProcarStatePlotter #keep in same folder as procar_filter_lorbit14
 
 class CombinedBandMatcher:
     def __init__(self, simple_dir, full_dir, max_distance=0.01):
@@ -601,8 +601,8 @@ class CombinedBandMatcher:
 
 
 if __name__ == "__main__":
-    simple_dir = 'C:/Users/Benjamin Kafin/Documents/VASP/fcc/NHC/kp552'
-    full_dir   = 'C:/Users/Benjamin Kafin/Documents/VASP/fcc/kp552/'
+    simple_dir = 'C:/dir1'
+    full_dir   = 'C:/dir2'
     
     matcher = CombinedBandMatcher(simple_dir, full_dir, max_distance=0.1)
     matcher.run(energy_range=(-4.32, 8.5), center_seq=40,cmap_name="coolwarm",power=0.25
