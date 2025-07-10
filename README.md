@@ -1,4 +1,4 @@
-This folder contains a couple sets of code for parseing and analyzing VASP PROCAR files. 
+This folder contains a couple sets of code for parsing and analyzing VASP PROCAR files. 
 
 Specifically, the files "procar_filter",and the two Band_matching files are designed for VASP calculations using lorbit = 10 which writes the PROCAR and DOSCAR with only the angular-spin resolved s, p, and d orbitals.
   procar_filter parses a PROCAR file and removes requested atoms from individual bands. 
